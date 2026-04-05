@@ -153,6 +153,34 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    /// 映射虚拟地址空间
+    pub fn mmap(&self, start: usize, len: usize, prot: usize) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        inner.tasks[cur].mmap(start, len, prot)
+    }
+
+    /// 取消映射虚拟地址空间
+    pub fn munmap(&self, start: usize, len: usize) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        inner.tasks[cur].munmap(start, len)
+    }
+
+    /// 记录系统调用次数
+    pub fn record_syscall(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        inner.tasks[cur].syscall_times[syscall_id] += 1;
+    }
+
+    /// 获取系统调用次数
+    pub fn get_syscall_count(&self, syscall_id: usize) -> isize {
+        let inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        inner.tasks[cur].syscall_times[syscall_id] as isize
+    }
 }
 
 /// Run the first task in task list.
@@ -201,4 +229,30 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// 映射虚拟地址空间
+pub fn mmap(start: usize, len: usize, prot: usize) -> isize {
+    TASK_MANAGER.mmap(start, len, prot)
+}
+
+/// 取消映射虚拟地址空间
+pub fn munmap(start: usize, len: usize) -> isize {
+    TASK_MANAGER.munmap(start, len)
+}
+
+/// 记录系统调用次数
+pub fn record_syscall(syscall_id: usize) {
+    if syscall_id < 500 {
+        TASK_MANAGER.record_syscall(syscall_id);
+    }
+}
+
+/// 获取系统调用次数
+pub fn get_syscall_count(syscall_id: usize) -> isize {
+    if syscall_id < 500 {
+        TASK_MANAGER.get_syscall_count(syscall_id)
+    } else {
+        0
+    }
 }

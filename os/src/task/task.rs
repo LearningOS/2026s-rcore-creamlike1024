@@ -28,6 +28,9 @@ pub struct TaskControlBlock {
 
     /// Program break
     pub program_brk: usize,
+
+    /// syscall times
+    pub syscall_times: [u32; 500],
 }
 
 impl TaskControlBlock {
@@ -63,6 +66,7 @@ impl TaskControlBlock {
             base_size: user_sp,
             heap_bottom: user_sp,
             program_brk: user_sp,
+            syscall_times: [0; 500],
         };
         // prepare TrapContext in user space
         let trap_cx = task_control_block.get_trap_cx();
@@ -95,6 +99,16 @@ impl TaskControlBlock {
         } else {
             None
         }
+    }
+
+    /// 映射虚拟地址空间
+    pub fn mmap(&mut self, start: usize, len: usize, prot: usize) -> isize {
+        self.memory_set.mmap(start, len, prot)
+    }
+
+    /// 取消映射虚拟地址空间
+    pub fn munmap(&mut self, start: usize, len: usize) -> isize {
+        self.memory_set.munmap(start, len)
     }
 }
 
