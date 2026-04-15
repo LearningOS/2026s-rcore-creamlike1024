@@ -300,6 +300,98 @@ impl MemorySet {
             false
         }
     }
+
+    /// 映射虚拟地址空间
+    pub fn mmap(&mut self, start: usize, len: usize, prot: usize) -> isize {
+        if start % PAGE_SIZE != 0 {
+            return -1;
+        }
+        let prot_flags = prot & 0b111;
+        if prot_flags == 0 || (prot & !0x7) != 0 {
+            return -1;
+        }
+        if len == 0 {
+            return 0;
+        }
+
+        let start_va = VirtAddr::from(start);
+        let end_va = VirtAddr::from(start + len);
+        let start_vpn = start_va.floor();
+        let end_vpn = end_va.ceil();
+
+        // 检查是否与已有的映射重叠
+        for vpn in VPNRange::new(start_vpn, end_vpn) {
+            if self
+                .page_table
+                .translate(vpn)
+                .map(|pte| pte.is_valid())
+                .unwrap_or(false)
+            {
+                return -1;
+            }
+        }
+
+        // 必须为 U 标志
+        let mut map_perm = MapPermission::U;
+        if (prot & 1) != 0 {
+            map_perm |= MapPermission::R;
+        }
+        if (prot & 2) != 0 {
+            map_perm |= MapPermission::W;
+        }
+        if (prot & 4) != 0 {
+            map_perm |= MapPermission::X;
+        }
+
+        // 添加新的映射
+        self.push(
+            MapArea::new(start_va, end_va, MapType::Framed, map_perm),
+            None,
+        );
+
+        0
+    }
+
+    /// 取消映射虚拟地址空间
+    pub fn munmap(&mut self, start: usize, len: usize) -> isize {
+        if start % PAGE_SIZE != 0 {
+            return -1;
+        }
+        if len == 0 {
+            return 0;
+        }
+        let start_va = VirtAddr::from(start);
+        let end_va = VirtAddr::from(start + len);
+        let start_vpn = start_va.floor();
+        let end_vpn = end_va.ceil();
+
+        // 检查给定区间是否已经全部映射
+        for vpn in VPNRange::new(start_vpn, end_vpn) {
+            if !self
+                .page_table
+                .translate(vpn)
+                .map(|pte| pte.is_valid())
+                .unwrap_or(false)
+            {
+                return -1;
+            }
+        }
+
+        // 逐个取消映射
+        for vpn in VPNRange::new(start_vpn, end_vpn) {
+            for area in self.areas.iter_mut() {
+                if area.vpn_range.get_start() <= vpn && vpn < area.vpn_range.get_end() {
+                    area.unmap_one(&mut self.page_table, vpn);
+                    break;
+                }
+            }
+        }
+        // 刷新 TLB
+        unsafe {
+            asm!("sfence.vma");
+        }
+        0
+    }
 }
 /// map area structure, controls a contiguous piece of virtual memory
 pub struct MapArea {
