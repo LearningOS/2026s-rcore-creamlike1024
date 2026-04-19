@@ -49,6 +49,16 @@ pub struct ProcessControlBlockInner {
     pub semaphore_list: Vec<Option<Arc<Semaphore>>>,
     /// condvar list
     pub condvar_list: Vec<Option<Arc<Condvar>>>,
+    /// deadlock detection enabled
+    pub is_deadlock_detect_enabled: bool,
+    /// sem_alloc: tid -> sem_id -> count
+    pub sem_alloc: Vec<Vec<usize>>,
+    /// sem_wait: tid -> sem_id
+    pub sem_wait: Vec<Option<usize>>,
+    /// mutex_alloc: mutex_id -> tid
+    pub mutex_alloc: Vec<Option<usize>>,
+    /// mutex_wait: tid -> mutex_id
+    pub mutex_wait: Vec<Option<usize>>,
 }
 
 impl ProcessControlBlockInner {
@@ -81,6 +91,126 @@ impl ProcessControlBlockInner {
     /// get a task with tid in this process
     pub fn get_task(&self, tid: usize) -> Arc<TaskControlBlock> {
         self.tasks[tid].as_ref().unwrap().clone()
+    }
+
+    pub fn ensure_tid(&mut self, tid: usize) {
+        if tid >= self.sem_alloc.len() {
+            self.sem_alloc.resize(tid + 1, Vec::new());
+        }
+        if tid >= self.sem_wait.len() {
+            self.sem_wait.resize(tid + 1, None);
+        }
+        if tid >= self.mutex_wait.len() {
+            self.mutex_wait.resize(tid + 1, None);
+        }
+    }
+
+    pub fn ensure_sem_alloc(&mut self, tid: usize, sem_id: usize) {
+        self.ensure_tid(tid);
+        if sem_id >= self.sem_alloc[tid].len() {
+            self.sem_alloc[tid].resize(sem_id + 1, 0);
+        }
+    }
+
+    pub fn check_deadlock_mutex(&self, request_tid: usize, request_mutex: usize) -> bool {
+        let n = self.tasks.len();
+        let m = self.mutex_list.len();
+        let mut available = vec![0; m];
+        for (i, mutex_opt) in self.mutex_list.iter().enumerate() {
+            if mutex_opt.is_some() {
+                if self.mutex_alloc.get(i).and_then(|x| *x).is_none() {
+                    available[i] = 1;
+                } else {
+                    available[i] = 0;
+                }
+            }
+        }
+        let mut finish = vec![false; n];
+        let mut work = available.clone();
+        loop {
+            let mut found = false;
+            for i in 0..n {
+                if !finish[i] && self.tasks.get(i).and_then(|t| t.as_ref()).is_some() {
+                    let t = self.tasks[i].as_ref().unwrap();
+                    let needed = if i == request_tid {
+                        Some(request_mutex)
+                    } else if t.inner_exclusive_access().task_status == crate::task::TaskStatus::Blocked {
+                        *self.mutex_wait.get(i).unwrap_or(&None)
+                    } else {
+                        None
+                    };
+                    let can_finish = match needed {
+                        None => true,
+                        Some(mutex_id) => work[mutex_id] >= 1,
+                    };
+                    if can_finish {
+                        finish[i] = true;
+                        found = true;
+                        for j in 0..m {
+                            if let Some(owner) = self.mutex_alloc.get(j).and_then(|x| *x) {
+                                if owner == i {
+                                    work[j] += 1;
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    finish[i] = true;
+                }
+            }
+            if !found { break; }
+        }
+        finish.iter().any(|&f| !f)
+    }
+
+    pub fn check_deadlock_sem(&self, request_tid: usize, request_sem: usize) -> bool {
+        let n = self.tasks.len();
+        let m = self.semaphore_list.len();
+        let mut available = Vec::new();
+        for sem_opt in &self.semaphore_list {
+            if let Some(sem) = sem_opt {
+                let count = sem.inner.exclusive_access().count;
+                available.push(if count > 0 { count as usize } else { 0 });
+            } else {
+                available.push(0);
+            }
+        }
+        let mut finish = vec![false; n];
+        let mut work = available.clone();
+        loop {
+            let mut found = false;
+            for i in 0..n {
+                if !finish[i] && self.tasks.get(i).and_then(|t| t.as_ref()).is_some() {
+                    let t = self.tasks[i].as_ref().unwrap();
+                    let needed = if i == request_tid {
+                        Some(request_sem)
+                    } else if t.inner_exclusive_access().task_status == crate::task::TaskStatus::Blocked {
+                        *self.sem_wait.get(i).unwrap_or(&None)
+                    } else {
+                        None
+                    };
+                    let can_finish = match needed {
+                        None => true,
+                        Some(sem_id) => work[sem_id] >= 1,
+                    };
+                    if can_finish {
+                        finish[i] = true;
+                        found = true;
+                        if i < self.sem_alloc.len() {
+                            for j in 0..m {
+                                if j < self.sem_alloc[i].len() {
+                                    work[j] += self.sem_alloc[i][j];
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    finish[i] = true;
+                }
+            }
+            if !found { break; }
+        }
+        finish.iter().any(|&f| !f)
     }
 }
 
@@ -119,6 +249,11 @@ impl ProcessControlBlock {
                     mutex_list: Vec::new(),
                     semaphore_list: Vec::new(),
                     condvar_list: Vec::new(),
+                    is_deadlock_detect_enabled: false,
+                    sem_alloc: Vec::new(),
+                    sem_wait: Vec::new(),
+                    mutex_alloc: Vec::new(),
+                    mutex_wait: Vec::new(),
                 })
             },
         });
@@ -245,6 +380,11 @@ impl ProcessControlBlock {
                     mutex_list: Vec::new(),
                     semaphore_list: Vec::new(),
                     condvar_list: Vec::new(),
+                    is_deadlock_detect_enabled: false,
+                    sem_alloc: Vec::new(),
+                    sem_wait: Vec::new(),
+                    mutex_alloc: Vec::new(),
+                    mutex_wait: Vec::new(),
                 })
             },
         });
