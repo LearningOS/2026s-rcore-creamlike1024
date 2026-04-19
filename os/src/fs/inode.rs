@@ -4,7 +4,7 @@
 //!
 //! `UPSafeCell<OSInodeInner>` -> `OSInode`: for static `ROOT_INODE`,we
 //! need to wrap `OSInodeInner` into `UPSafeCell`
-use super::File;
+use super::{File, StatMode};
 use crate::drivers::BLOCK_DEVICE;
 use crate::mm::UserBuffer;
 use crate::sync::UPSafeCell;
@@ -53,6 +53,13 @@ impl OSInode {
         }
         v
     }
+    /// Get file stat: returns (inode_id, mode, nlink)
+    pub fn get_stat(&self) -> (u64, StatMode, u32) {
+        let inner = self.inner.exclusive_access();
+        let (ino, is_dir, nlink) = inner.inode.stat();
+        let mode = if is_dir { StatMode::DIR } else { StatMode::FILE };
+        (ino, mode, nlink)
+    }
 }
 
 lazy_static! {
@@ -69,6 +76,16 @@ pub fn list_apps() {
         println!("{}", app);
     }
     println!("**************/");
+}
+
+/// Create a hard link: new_name -> old_name
+pub fn link_file(old_name: &str, new_name: &str) -> isize {
+    ROOT_INODE.link(old_name, new_name)
+}
+
+/// Remove a hard link (unlink)
+pub fn unlink_file(name: &str) -> isize {
+    ROOT_INODE.unlink(name)
 }
 
 bitflags! {
@@ -131,6 +148,16 @@ impl File for OSInode {
     }
     fn writable(&self) -> bool {
         self.writable
+    }
+    fn stat(&self) -> Option<(u64, super::StatMode, u32)> {
+        let inner = self.inner.exclusive_access();
+        let (ino, is_dir, nlink) = inner.inode.stat();
+        let mode = if is_dir {
+            super::StatMode::DIR
+        } else {
+            super::StatMode::FILE
+        };
+        Some((ino, mode, nlink))
     }
     fn read(&self, mut buf: UserBuffer) -> usize {
         let mut inner = self.inner.exclusive_access();
